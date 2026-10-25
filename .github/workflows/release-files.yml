@@ -1,0 +1,18 @@
+# Puts build.sh and handler.py on a new release whenever they change.
+# The Dockerfile downloads them from the latest release, so every build gets the newest files.
+name: Release build files
+on:
+  push:
+    branches: [main]
+    paths: [build.sh, handler.py]
+permissions:
+  contents: write
+jobs:
+  release:
+    if: github.repository_owner == 'afterdark-workers'  # copies made from this template skip it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release create "files-${GITHUB_SHA::9}" build.sh handler.py --title "Build files ${GITHUB_SHA::9}" --notes "Downloaded by the Dockerfile at build time."
+        env:
+          GH_TOKEN: ${{ github.token }}
