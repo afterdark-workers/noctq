@@ -1,6 +1,6 @@
 # NoctQ V4 (Qwen-Image 2.1) — RunPod Serverless worker
 
-A ready-to-build [RunPod Serverless](https://runpod.io?ref=qpguwapm) worker for **NoctQ V4**, an uncensored Qwen-Image 2.1 fine-tune. Based on the official [`runpod/worker-comfyui`](https://github.com/runpod-workers/worker-comfyui).
+A ready-to-build [RunPod Serverless](https://runpod.io?ref=qpguwapm) worker for **[NoctQ V4](https://huggingface.co/Noctaluna/Noct-Q-Uncensored-Qwen-Image-2.1)**, an uncensored Qwen-Image 2.1 fine-tune. Based on the official [`runpod/worker-comfyui`](https://github.com/runpod-workers/worker-comfyui).
 
 Models are baked into the image, so a cold start does not re-download anything.
 
@@ -10,9 +10,9 @@ Models are baked into the image, so a cold start does not re-download anything.
 
 | File | Source | Size |
 |---|---|---|
-| `diffusion_models/NoctQ_V4_int8_convrot.safetensors` | Noctaluna/Noct-Q-Uncensored-Qwen-Image-2.1 | 7.3 GB |
-| `text_encoders/qwen3vl_8b_int8_convrot.safetensors` | Comfy-Org/Qwen-Image-2.1 | 9.4 GB |
-| `vae/qwen_image_2.1_vae_bf16.safetensors` | Comfy-Org/Qwen-Image-2.1 | 0.7 GB |
+| `diffusion_models/NoctQ_V4_int8_convrot.safetensors` | [Noctaluna/Noct-Q-Uncensored-Qwen-Image-2.1](https://huggingface.co/Noctaluna/Noct-Q-Uncensored-Qwen-Image-2.1) | 7.3 GB |
+| `text_encoders/qwen3vl_8b_int8_convrot.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) | 9.4 GB |
+| `vae/qwen_image_2.1_vae_bf16.safetensors` | [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1) | 0.7 GB |
 
 Just the model as its creator released it — no LoRAs, no extra nodes. All files are checked by SHA-256 at build time. ComfyUI is upgraded to 0.39.0.
 
