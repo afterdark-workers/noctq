@@ -278,22 +278,30 @@ def baked_loras():
 
 def pick_baked(baked, chosen):
     """input.baked_loras = [{"link", "strength"}] picks the built-in LoRAs for this picture ([] = none);
-    without it every built-in LoRA is used at its LORAS strength. Returns (LoRAs, error)."""
+    without it every built-in LoRA is used at its LORAS strength. One that isn't built in (yet) is left out
+    and named in the warning, so a picture sent while the worker builds again still comes out.
+    Returns (LoRAs, links left out, error)."""
     if chosen is None:
-        return baked, None
+        return baked, [], None
     if not isinstance(chosen, list):
-        return [], "'baked_loras' must be a list"
-    out = []
+        return [], [], "'baked_loras' must be a list"
+    out, missing = [], []
     for c in chosen:
         link = str((c or {}).get("link", "")).rstrip("/") if isinstance(c, dict) else ""
         b = next((b for b in baked if b["link"].rstrip("/") == link), None)
         if not b:
-            return [], f"LoRA {link or c} is not built into this worker — add it to the LORAS line and build the worker again"
+            missing.append(link or str(c))
+            continue
         try:
             out.append({**b, "strength": float(c.get("strength", b["strength"]))})
         except (TypeError, ValueError):
-            return [], f"invalid strength for LoRA {link}"
-    return out, None
+            return [], [], f"invalid strength for LoRA {link}"
+    return out, missing, None
+
+
+def not_built(missing):
+    return (f"{len(missing)} LoRA is not built into this worker yet — the picture was made without it "
+            "(the worker is still building, or it is not on the LORAS line): " + ", ".join(missing))
 
 
 # A LoraLoaderModelOnly per LoRA goes right after each model loader (LoraLoader when a text encoder is there too),
@@ -865,7 +873,7 @@ def handler(job):
 
     # Extract validated data
     workflow = validated_data["workflow"]
-    baked, lora_error = pick_baked(baked_loras(), job_input.get("baked_loras"))
+    baked, not_baked, lora_error = pick_baked(baked_loras(), job_input.get("baked_loras"))
     if lora_error:
         return {"error": lora_error}
     if baked:
@@ -1159,6 +1167,9 @@ def handler(job):
         if unused:
             final_result["warning"] = (f"{len(unused)} LoRA had no effect — it was made for a different model "
                                        "or in a format this worker cannot read: " + ", ".join(unused))
+        if not_baked:
+            final_result["warning"] = " · ".join(filter(None, [final_result.get("warning"), not_built(not_baked)]))
+        final_result["built_in"] = [b["link"] for b in baked_loras()]  # the app learns which LoRAs this worker has
 
     if errors:
         final_result["errors"] = errors
