@@ -81,6 +81,8 @@ def fetch_remote_loras(items):
         return None
     if not isinstance(items, list):
         return "'remote_loras' must be a list"
+    if items and REMOTE_LORA_MAX == 0:
+        return "this worker takes only LoRAs built into it (REMOTE_LORA_MAX is 0)"
     if len(items) > REMOTE_LORA_MAX:
         return (f"this worker takes at most {REMOTE_LORA_MAX} LoRAs per picture — for more, set REMOTE_LORA_MAX "
                 "in the endpoint's environment variables (RunPod → your endpoint → Manage → Edit Endpoint)")
@@ -184,7 +186,8 @@ def unused_loras(items, since):
 
 
 # LoRAs built into the worker — the Dockerfile's LORAS line ("<Civitai or Hugging Face link> [strength] …") is downloaded
-# at build time by `handler.py --bake-loras` and put on every picture, before the request's own LoRAs.
+# at build time by `handler.py --bake-loras`. A request picks which ones it uses (input.baked_loras, see pick_baked);
+# without that every one is used, before the request's own LoRAs.
 BAKED_LIST = "/baked_loras.json"
 NUMBER = re.compile(r"-?\d+(\.\d+)?")
 
@@ -220,7 +223,7 @@ def lora_source(link):
             url += ("&" if "?" in url else "?") + "token=" + token
         return url, (f.get("hashes") or {}).get("SHA256", "").lower() or None, {}
     if host == "huggingface.co":
-        hdr = {"Authorization": "Bearer " + os.environ["HF_TOKEN"]} if os.environ.get("HF_TOKEN") else {}
+        hdr = {"Authorization": "Bearer " + setting("HF_TOKEN")} if setting("HF_TOKEN") else {}
         p = u.path.strip("/").split("/")
         if len(p) > 4 and p[2] in ("blob", "resolve"):
             return f"https://huggingface.co/{p[0]}/{p[1]}/resolve/{'/'.join(p[3:])}", None, hdr
@@ -257,6 +260,7 @@ def bake_loras(spec, lora_dir, after=None):
                     f.write(chunk)
         if digest and h.hexdigest() != digest:
             raise ValueError(f"{it['link']}: sha256 mismatch")
+        it["sha256"] = h.hexdigest()
         if after:
             after(dest)
         print(f"LoRA {i + 1}/{len(items)} built in: {it['link']} × {it['strength']:g} ({os.path.getsize(dest) >> 20} MB)")
@@ -270,6 +274,26 @@ def baked_loras():
             return json.load(f)
     except (OSError, ValueError):
         return []
+
+
+def pick_baked(baked, chosen):
+    """input.baked_loras = [{"link", "strength"}] picks the built-in LoRAs for this picture ([] = none);
+    without it every built-in LoRA is used at its LORAS strength. Returns (LoRAs, error)."""
+    if chosen is None:
+        return baked, None
+    if not isinstance(chosen, list):
+        return [], "'baked_loras' must be a list"
+    out = []
+    for c in chosen:
+        link = str((c or {}).get("link", "")).rstrip("/") if isinstance(c, dict) else ""
+        b = next((b for b in baked if b["link"].rstrip("/") == link), None)
+        if not b:
+            return [], f"LoRA {link or c} is not built into this worker — add it to the LORAS line and build the worker again"
+        try:
+            out.append({**b, "strength": float(c.get("strength", b["strength"]))})
+        except (TypeError, ValueError):
+            return [], f"invalid strength for LoRA {link}"
+    return out, None
 
 
 # A LoraLoaderModelOnly per LoRA goes right after each model loader (LoraLoader when a text encoder is there too),
@@ -841,7 +865,9 @@ def handler(job):
 
     # Extract validated data
     workflow = validated_data["workflow"]
-    baked = baked_loras()
+    baked, lora_error = pick_baked(baked_loras(), job_input.get("baked_loras"))
+    if lora_error:
+        return {"error": lora_error}
     if baked:
         add_loras(workflow, baked, "baked")
     input_images = validated_data.get("images")

@@ -5,7 +5,7 @@
 # Only needed for Civitai links in LORAS: your Civitai API token (civitai.com → Account settings → API Keys → Read Only).
 # If you put one here, keep your repo PRIVATE.
 ARG CIVITAI_TOKEN=""
-# >>> Optional — LoRAs built into the worker and used on every picture: Civitai or Hugging Face links, each followed by
+# >>> Optional — LoRAs built into the worker (each picture picks which to use): Civitai or Hugging Face links, each followed by
 #     its strength (1 when left out), separated by spaces. Leave it empty for none. Example:
 #     ARG LORAS="https://civitai.com/models/12345 0.8 https://huggingface.co/user/some-lora 0.6"   <<<
 ARG LORAS=""
