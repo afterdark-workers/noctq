@@ -16,6 +16,7 @@ import traceback
 import logging
 import hashlib
 import re
+from datetime import datetime
 
 from network_volume import (
     is_network_volume_debug_enabled,
@@ -105,6 +106,7 @@ def fetch_remote_loras(items):
         if h.hexdigest() != digest:
             os.remove(tmp)
             return f"remote LoRA {name} sha256 mismatch"
+        convert_xlabs_lora(tmp)
         os.replace(tmp, dest)
         print(f"worker-comfyui - Remote LoRA {name} ready ({os.path.getsize(dest) >> 20} MB, {time.time() - t0:.1f}s)")
     remote = sorted((os.path.join(LORA_DIR, f) for f in os.listdir(LORA_DIR)
@@ -112,6 +114,68 @@ def fetch_remote_loras(items):
     for old in remote[:-REMOTE_LORA_KEEP]:
         os.remove(old)
     return None
+
+
+def lora_keys(path):
+    """Tensor names from the safetensors header (no tensors are read)."""
+    with open(path, "rb") as f:
+        n = int.from_bytes(f.read(8), "little")
+        return [k for k in json.loads(f.read(n)) if k != "__metadata__"]
+
+
+XLABS_KEY = re.compile(r"^(double|single)_blocks\.\d+\.processor\.")
+XLABS_RENAME = [(".down.weight", ".lora_down.weight"), (".up.weight", ".lora_up.weight"),
+                (".qkv_lora2.", ".txt_attn.qkv."), (".qkv_lora1.", ".img_attn.qkv."),
+                (".proj_lora1.", ".img_attn.proj."), (".proj_lora2.", ".txt_attn.proj."),
+                (".qkv_lora.", ".linear1_qkv."), (".proj_lora.", ".linear2."), (".processor.", ".")]
+
+
+def convert_xlabs_lora(path):
+    """XLabs Flux LoRAs (double_blocks.N.processor.qkv_lora1 …) get the tensor names ComfyUI reads.
+    ComfyUI converts them only when every block is present and otherwise skips the LoRA without an error.
+    Only the header is rewritten — the tensor data stays as it is."""
+    with open(path, "rb") as f:
+        n = int.from_bytes(f.read(8), "little")
+        header = json.loads(f.read(n))
+        keys = [k for k in header if k != "__metadata__"]
+        if not keys or not all(XLABS_KEY.match(k) for k in keys):
+            return
+        renamed = {}
+        for k, v in header.items():
+            if k != "__metadata__":
+                for x, y in XLABS_RENAME:
+                    k = k.replace(x, y)
+                k = "diffusion_model." + k
+            renamed[k] = v
+        head = json.dumps(renamed, separators=(",", ":")).encode()
+        head += b" " * (-len(head) % 8)
+        with open(path + ".x", "wb") as out:
+            out.write(len(head).to_bytes(8, "little") + head)
+            while chunk := f.read(1 << 20):
+                out.write(chunk)
+    os.replace(path + ".x", path)
+    print(f"worker-comfyui - Converted XLabs LoRA ({len(keys)} tensors)")
+
+
+def unused_loras(items, since):
+    """Names of remote LoRAs that ComfyUI mostly skipped («lora key not loaded» in its log since `since`)."""
+    try:
+        entries = requests.get(f"http://{COMFY_HOST}/internal/logs/raw", timeout=10).json()["entries"]
+    except Exception as e:
+        print(f"worker-comfyui - Could not read ComfyUI log: {e}")
+        return []
+    missed = set(re.findall(r"lora key not loaded: (\S+)", "".join(e["m"] for e in entries if e["t"] >= since)))
+    unused = []
+    for it in items or []:
+        path = os.path.join(LORA_DIR, it["name"])
+        try:
+            keys = lora_keys(path)
+        except OSError:
+            continue
+        miss = sum(k in missed for k in keys)
+        if keys and miss >= min(len(keys) / 2, 100):  # the log keeps only the last 300 lines
+            unused.append(it["name"])
+    return unused
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +727,7 @@ def handler(job):
         }
 
     # Extra LoRAs from the request
+    job_start = datetime.now().isoformat()
     lora_error = fetch_remote_loras(job_input.get("remote_loras"))
     if lora_error:
         return {"error": lora_error}
@@ -934,6 +999,10 @@ def handler(job):
 
     if output_data:
         final_result["images"] = output_data
+        unused = unused_loras(job_input.get("remote_loras"), job_start)
+        if unused:
+            final_result["warning"] = (f"{len(unused)} LoRA had no effect — it was made for a different model "
+                                       "or in a format this worker cannot read: " + ", ".join(unused))
 
     if errors:
         final_result["errors"] = errors
