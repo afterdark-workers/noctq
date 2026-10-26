@@ -16,6 +16,7 @@ import traceback
 import logging
 import hashlib
 import re
+import sys
 from datetime import datetime
 
 from network_volume import (
@@ -63,13 +64,14 @@ COMFY_HOST = "127.0.0.1:8188"
 REFRESH_WORKER = os.environ.get("REFRESH_WORKER", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
-# Extra LoRAs per request — input.remote_loras = [{"name", "url", "sha256"}]
+# Extra LoRAs per request — input.remote_loras = [{"name", "url", "sha256"}], at most REMOTE_LORA_MAX (default 4)
 #   A LoRA that is not in the image is downloaded to models/loras (cached while the worker lives)
 #   and read by name from the workflow's LoraLoader. Files are checked by sha256; only the newest REMOTE_LORA_KEEP are kept.
 # ---------------------------------------------------------------------------
 LORA_DIR = "/comfyui/models/loras"
 REMOTE_LORA_PREFIX = "remote_"
-REMOTE_LORA_KEEP = int(os.environ.get("REMOTE_LORA_KEEP", 4))
+REMOTE_LORA_MAX = int(os.environ.get("REMOTE_LORA_MAX", 4))
+REMOTE_LORA_KEEP = int(os.environ.get("REMOTE_LORA_KEEP", max(4, REMOTE_LORA_MAX)))
 REMOTE_LORA_NAME = re.compile(r"remote_[A-Za-z0-9_-]{1,80}\.safetensors")
 
 
@@ -77,8 +79,11 @@ def fetch_remote_loras(items):
     """Download missing LoRAs only. Returns an error string on failure, None on success."""
     if not items:
         return None
-    if not isinstance(items, list) or len(items) > 4:
-        return "'remote_loras' must be a list of at most 4 objects"
+    if not isinstance(items, list):
+        return "'remote_loras' must be a list"
+    if len(items) > REMOTE_LORA_MAX:
+        return (f"this worker takes at most {REMOTE_LORA_MAX} LoRAs per picture — for more, set REMOTE_LORA_MAX "
+                "in the endpoint's environment variables (RunPod → your endpoint → Manage → Edit Endpoint)")
     for it in items:
         name, url, digest = (it or {}).get("name"), (it or {}).get("url"), (it or {}).get("sha256")
         if not (isinstance(name, str) and REMOTE_LORA_NAME.fullmatch(name) and isinstance(url, str)
@@ -174,8 +179,130 @@ def unused_loras(items, since):
             continue
         miss = sum(k in missed for k in keys)
         if keys and miss >= min(len(keys) / 2, 100):  # the log keeps only the last 300 lines
-            unused.append(it["name"])
+            unused.append(it.get("link") or it["name"])
     return unused
+
+
+# LoRAs built into the worker — the Dockerfile's LORAS line ("<Civitai or Hugging Face link> [strength] …") is downloaded
+# at build time by `handler.py --bake-loras` and put on every picture, before the request's own LoRAs.
+BAKED_LIST = "/baked_loras.json"
+NUMBER = re.compile(r"-?\d+(\.\d+)?")
+
+
+def setting(key):
+    """A build setting: the Dockerfile line, or civitai.env in the copy (Cobalt Pear's «Add your token» link writes it)."""
+    v = os.environ.get(key, "")
+    if (not v or v.startswith("PASTE_")) and os.path.exists("/setup/civitai.env"):
+        for line in open("/setup/civitai.env"):
+            k, _, x = line.partition("=")
+            if k.strip() == key:
+                v = x.strip().strip("\"'")
+    return "" if v.startswith("PASTE_") else v
+
+
+def lora_source(link):
+    """(download URL, sha256 or None, request headers) for a Civitai or Hugging Face LoRA link."""
+    u = urllib.parse.urlparse(link)
+    host, q = u.hostname or "", urllib.parse.parse_qs(u.query)
+    if host == "civitai.com" or host.endswith(".civitai.com"):
+        m = re.search(r"/api/download/models/(\d+)", u.path)
+        version = m.group(1) if m else (q.get("modelVersionId") or [None])[0]
+        if not version:
+            m = re.search(r"/models/(\d+)", u.path)
+            if not m:
+                raise ValueError(f"{link}: not a Civitai model link")
+            version = requests.get(f"https://civitai.com/api/v1/models/{m.group(1)}", timeout=30).json()["modelVersions"][0]["id"]
+        v = requests.get(f"https://civitai.com/api/v1/model-versions/{version}", timeout=30).json()
+        f = next((f for f in v["files"] if f.get("primary")), v["files"][0])
+        token = setting("CIVITAI_TOKEN")
+        url = f["downloadUrl"]
+        if token:
+            url += ("&" if "?" in url else "?") + "token=" + token
+        return url, (f.get("hashes") or {}).get("SHA256", "").lower() or None, {}
+    if host == "huggingface.co":
+        hdr = {"Authorization": "Bearer " + os.environ["HF_TOKEN"]} if os.environ.get("HF_TOKEN") else {}
+        p = u.path.strip("/").split("/")
+        if len(p) > 4 and p[2] in ("blob", "resolve"):
+            return f"https://huggingface.co/{p[0]}/{p[1]}/resolve/{'/'.join(p[3:])}", None, hdr
+        if len(p) < 2:
+            raise ValueError(f"{link}: not a Hugging Face model link")
+        tree = requests.get(f"https://huggingface.co/api/models/{p[0]}/{p[1]}/tree/main?recursive=1", headers=hdr, timeout=30).json()
+        files = [x["path"] for x in tree if x.get("type") == "file" and x["path"].endswith(".safetensors")]
+        if len(files) != 1:
+            raise ValueError(f"{link}: {len(files)} .safetensors files in that repo — link the one you want")
+        return f"https://huggingface.co/{p[0]}/{p[1]}/resolve/main/{files[0]}", None, hdr
+    raise ValueError(f"{link}: not a Civitai or Hugging Face link")
+
+
+def bake_loras(spec, lora_dir, after=None):
+    """Download the LORAS line's LoRAs as baked_<n>.safetensors and list them in BAKED_LIST."""
+    items = []
+    for w in spec.split():
+        if NUMBER.fullmatch(w) and items:
+            items[-1]["strength"] = float(w)
+        else:
+            items.append({"link": w, "strength": 1.0})
+    os.makedirs(lora_dir, exist_ok=True)
+    for i, it in enumerate(items):
+        url, digest, hdr = lora_source(it["link"])
+        it["name"] = f"baked_{i}.safetensors"
+        dest, h = os.path.join(lora_dir, it["name"]), hashlib.sha256()
+        with requests.get(url, headers=hdr, stream=True, timeout=(10, 300)) as r:
+            if r.status_code in (401, 403):
+                raise ValueError(f"{it['link']}: download refused ({r.status_code}) — a Civitai LoRA needs CIVITAI_TOKEN, a gated HF one HF_TOKEN")
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    h.update(chunk)
+                    f.write(chunk)
+        if digest and h.hexdigest() != digest:
+            raise ValueError(f"{it['link']}: sha256 mismatch")
+        if after:
+            after(dest)
+        print(f"LoRA {i + 1}/{len(items)} built in: {it['link']} × {it['strength']:g} ({os.path.getsize(dest) >> 20} MB)")
+    with open(BAKED_LIST, "w") as f:
+        json.dump(items, f)
+
+
+def baked_loras():
+    try:
+        with open(BAKED_LIST) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+# A LoraLoaderModelOnly per LoRA goes right after each model loader (LoraLoader when a text encoder is there too),
+# and whatever read the loader reads the last LoRA instead — the same as Cobalt Pear does for a request's LoRAs.
+MODEL_LOADER = re.compile(r"^(UNETLoader|UnetLoaderGGUF\w*|CheckpointLoader\w*|ImageOnlyCheckpointLoader)$")
+CLIP_LOADER = re.compile(r"^(CLIPLoader\w*|DualCLIPLoader\w*|TripleCLIPLoader|QuadrupleCLIPLoader)$")
+
+
+def add_loras(wf, loras, prefix):
+    clip_id = next((k for k, n in wf.items() if CLIP_LOADER.match(n.get("class_type", ""))), None)
+    clip_done = False
+    for nid, n in list(wf.items()):
+        if not MODEL_LOADER.match(n.get("class_type", "")):
+            continue
+        clip_from = None if clip_done else [nid, 1] if n["class_type"].startswith("CheckpointLoader") else [clip_id, 0] if clip_id else None
+        model, clip, chain = [nid, 0], clip_from, []
+        for i, l in enumerate(loras):
+            key = f"{prefix}_{nid}_{i}"
+            s = l.get("strength", 1)
+            wf[key] = ({"class_type": "LoraLoader", "inputs": {"model": model, "clip": clip, "lora_name": l["name"], "strength_model": s, "strength_clip": s}}
+                       if clip else {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": l["name"], "strength_model": s}})
+            model, clip = [key, 0], [key, 1] if clip else None
+            chain.append(key)
+        for k, m in wf.items():
+            if k in chain:
+                continue
+            for name, x in (m.get("inputs") or {}).items():
+                if x == [nid, 0]:
+                    m["inputs"][name] = model
+                elif clip_from and x == clip_from:
+                    m["inputs"][name] = clip
+        if clip_from:
+            clip_done = True
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +841,9 @@ def handler(job):
 
     # Extract validated data
     workflow = validated_data["workflow"]
+    baked = baked_loras()
+    if baked:
+        add_loras(workflow, baked, "baked")
     input_images = validated_data.get("images")
 
     # Make sure that the ComfyUI HTTP API is available before proceeding
@@ -999,7 +1129,7 @@ def handler(job):
 
     if output_data:
         final_result["images"] = output_data
-        unused = unused_loras(job_input.get("remote_loras"), job_start)
+        unused = unused_loras((job_input.get("remote_loras") or []) + baked, job_start)
         if unused:
             final_result["warning"] = (f"{len(unused)} LoRA had no effect — it was made for a different model "
                                        "or in a format this worker cannot read: " + ", ".join(unused))
@@ -1027,5 +1157,8 @@ def handler(job):
 
 # Called at the top level (not under `if __name__ == "__main__":`) — RunPod's GitHub check
 # looks for this line in handler.py and warns «handler not found» otherwise.
+if "--bake-loras" in sys.argv:  # Dockerfile, at build time
+    bake_loras(setting("LORAS"), LORA_DIR, after=convert_xlabs_lora)
+    sys.exit(0)
 print("worker-comfyui - Starting handler...")
 runpod.serverless.start({"handler": handler})

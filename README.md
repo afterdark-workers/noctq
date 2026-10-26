@@ -71,6 +71,12 @@ The image comes back as base64 in `output.images[0].data`.
 
 Tips: 25 steps, CFG 3, Euler. A negative prompt is used.
 
+### LoRAs
+
+- **Per picture:** send up to 4 LoRAs with a request: `input.remote_loras` = `[{"name": "remote_<id>.safetensors", "url": "<download link>", "sha256": "<file sha256>"}]` plus a `LoraLoader` reading that name in the workflow — the worker downloads each once and keeps it while it runs. [Cobalt Pear](https://cobaltpear.github.io/) does all of this from a Civitai or Hugging Face link. For more than 4, set the environment variable `REMOTE_LORA_MAX` (e.g. `8`) on your endpoint (**Manage → Edit Endpoint → Environment Variables**).
+- **Built in:** put links in the `LORAS` line of your `Dockerfile` — each followed by its strength — and rebuild. They are downloaded once at build time and go on every picture, so a fresh worker doesn't download them again. Put their trigger words in your prompt yourself.
+- Pick LoRAs made for this model's base model — the worker warns (`output.warning`) when one doesn't fit.
+
 ### Compatible clients
 
 - [Cobalt Pear](https://cobaltpear.github.io/) — a one-page web app: add this repo's URL, your endpoint ID and API key, then just type a prompt. Everything stays in your browser. [Try the demo](https://cobaltpear.github.io/demo/) without RunPod.
