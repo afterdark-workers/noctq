@@ -44,6 +44,24 @@ RunPod → **Serverless** → **New Endpoint** → **Deploy from a GitHub reposi
 
 Leave everything else as it is, then **Deploy** at the bottom. The first build takes about 30 minutes. The very first request after that waits another 10–15 minutes while a worker pulls the image; later cold starts are much faster.
 
+## Or run it on Modal
+
+The same worker also runs on [Modal](https://modal.com) — another serverless GPU service, billed by the second — from `modal_app.py` in this repo. It builds the same `Dockerfile` and answers the same requests as on RunPod (`/run`, `/status/<id>`), so a client that calls RunPod endpoints needs only the other address and key.
+
+On your computer, with Python 3.10 or newer, in a copy of your repo (`git clone` it, with your `Dockerfile` lines filled in):
+
+```sh
+pip install modal
+modal setup                                                   # opens a page to sign in to Modal
+modal secret create cobaltpear-key CP_KEY=<a long password you make up>
+modal deploy modal_app.py                                     # builds, then prints the worker's address
+```
+
+- The address ending in `-api….modal.run` is your endpoint; send `Authorization: Bearer <that password>` with each request.
+- GPU: the `GPU` line at the top of `modal_app.py` (24 GB by default). A worker turns off 60 s after its last picture.
+- Modal needs a payment method on your account to use GPUs. Its prices: [modal.com/pricing](https://modal.com/pricing).
+- Updates: run `modal deploy modal_app.py` again.
+
 ## Updates
 
 Your copy holds nothing of its own. The build steps (`build.sh`, `handler.py`) are downloaded from this repo on every build, so when something changes upstream (a model file is replaced, ComfyUI needs an update) it is fixed here — you just rebuild your endpoint.
