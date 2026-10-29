@@ -2,7 +2,7 @@
 
 > 🔞 **Adult (18+) · NSFW** — part of afterdark-workers, workers for uncensored adult image and video models.
 
-A ready-to-build [RunPod Serverless](https://runpod.io?ref=qpguwapm) worker for **[NoctQ V4](https://huggingface.co/Noctaluna/Noct-Q-Uncensored-Qwen-Image-2.1)**, an uncensored Qwen-Image 2.1 fine-tune. Based on the official [`runpod/worker-comfyui`](https://github.com/runpod-workers/worker-comfyui).
+A ready-to-build [RunPod Serverless](https://runpod.io?ref=qpguwapm) worker for **[NoctQ V4](https://huggingface.co/Noctaluna/Noct-Q-Uncensored-Qwen-Image-2.1)** by [Noctaluna](https://huggingface.co/Noctaluna), an uncensored Qwen-Image 2.1 fine-tune. Based on the official [`runpod/worker-comfyui`](https://github.com/runpod-workers/worker-comfyui).
 
 Models are baked into the image, so a cold start does not re-download anything.
 
