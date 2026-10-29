@@ -39,12 +39,16 @@ RunPod → **Serverless** → **New Endpoint** → **Deploy from a GitHub reposi
 | Click **Advanced settings** to open it: | |
 | → **Active workers** | `0` — nothing to pay while idle |
 | → **GPU count** | `1` |
-| → **Idle timeout** | `5` sec |
+| → **Idle timeout** | `5` sec — or longer if you make several in a row (see below) |
 | → **Enable FlashBoot** | on (the switch) · **Standard** |
 | → **Enable execution timeout** | on · **Execution timeout** `600` sec |
 | → click **Container configuration** to open it → **Container disk** | 40 GB |
 
-Leave everything else as it is, then **Deploy** at the bottom. The first build takes about 30 minutes. The very first request after that waits another 10–15 minutes while a worker pulls the image; later cold starts are much faster.
+Leave everything else as it is, then **Deploy** at the bottom. The first build takes about 30 minutes. The very first request after that waits while a worker pulls the image — this can take a long time. The worker shows **Initializing**; leave it, it is downloading, not stuck.
+
+**Making several in a row?** With Idle timeout `5` sec, the worker turns off 5 seconds after each result, and the next request waits while a worker starts and loads the model again. It may be the same machine or a different one, so this wait can be short or long. If you look at a result and send the next one soon after, set **Idle timeout** higher, for example `300` sec (**Manage → Edit Endpoint**). The worker then stays on for that long after each result, and the next one starts right away. You pay for that time too, so set it back to `5` when you're done.
+
+In short: `5` sec means you wait at each start and pay nothing while idle. Longer means no wait, and you pay while it waits for you.
 
 ## Or run it on Modal
 
