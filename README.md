@@ -109,4 +109,6 @@ Tips: 25 steps, CFG 3, Euler. A negative prompt is used.
 
 - [Cobalt Pear](https://cobaltpear.github.io/) — a one-page web app: add this repo's URL, your endpoint ID and API key, then just type a prompt. Everything stays in your browser. [Try the demo](https://cobaltpear.github.io/demo/) without RunPod. What's different for these workers there: [Use with Cobalt Pear](https://afterdark-workers.github.io/cobalt-pear/).
 
+RunPod and Civitai change their pages from time to time. If a button or step here looks different from what you see, tell us in [Discussions](https://github.com/afterdark-workers/afterdark-workers.github.io/discussions) and we'll update this guide.
+
 Questions or ideas: [Discussions](https://github.com/afterdark-workers/afterdark-workers.github.io/discussions).
