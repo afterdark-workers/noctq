@@ -49,6 +49,7 @@ Leave everything else as it is, then **Deploy** at the bottom. The first build t
 The very first request after that waits while a worker pulls the image — this can take a long time. The worker shows **Initializing**. To see what it's doing: endpoint page → **Workers** → click the worker → **Logs** → **System**.
 
 - No error → leave it. A big image can sit on one line for a long time. Lines starting with `INFO` are normal.
+- `failed to pull image` (often with `unexpected EOF`) → RunPod's download onto that machine broke off. Your build is fine. RunPod usually starts over on its own; if the worker stays stuck, delete it with the 🗑 icon and a new one starts.
 - The same error keeps repeating → delete that worker with the 🗑 icon at the right end of its row. RunPod starts a new one.
 - Still failing after that → ask us in [Discussions](https://github.com/afterdark-workers/afterdark-workers.github.io/discussions) with a screenshot of the log, or the whole log.
 <!-- /cp:initializing -->
